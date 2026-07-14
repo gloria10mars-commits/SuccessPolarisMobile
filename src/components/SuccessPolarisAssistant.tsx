@@ -47,7 +47,7 @@ const SuccessPolarisAssistant: React.FC<SuccessPolarisAssistantProps> = ({ isOpe
 
         <View style={styles.webviewContainer}>
           <WebView
-            source={{ uri: 'https://www.stackai.com/chat/69bf07f4d6eabd15e91e0d64-0S0UCJiReYt23u3qA38Q79' }}
+            source={{ uri: 'https://astarte.leonemmanuel6247.workers.dev/' }}
             style={styles.webview}
             allowsInlineMediaPlayback
             mediaPlaybackRequiresUserAction={false}

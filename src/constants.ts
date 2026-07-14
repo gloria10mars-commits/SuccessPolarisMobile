@@ -25,7 +25,7 @@ export const APPS_SCRIPT_WEBHOOK_URL =
 // Léon Astarte Engine - backend IA configurable.
 // L'utilisateur peut héberger son propre backend (Node, Python, etc.) et pointer cette URL.
 // Format attendu: POST { messages: ChatMessage[], context: string } → { text: string }
-export const LEON_ASTARTE_ENDPOINT = 'https://leon-astarte-backend.example.com/api/chat';
+export const LEON_ASTARTE_ENDPOINT = 'https://astarte.leonemmanuel6247.workers.dev/api/chat';
 
 // Persona de l'IA - signature "Léon Astarte"
 export const LEON_ASTARTE_PERSONA = `Tu es Léon Astarte, un système d'IA intelligent et polyvalent.

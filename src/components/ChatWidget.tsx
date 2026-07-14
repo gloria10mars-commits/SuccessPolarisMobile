@@ -58,7 +58,7 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({ onOpen, isOpen, onClose }) => {
 
           <View style={styles.webviewContainer}>
             <WebView
-              source={{ uri: 'https://astarte18.pages.dev/' }}
+              source={{ uri: 'https://astarte.leonemmanuel6247.workers.dev/' }}
               style={styles.webview}
               allowsInlineMediaPlayback
               mediaPlaybackRequiresUserAction={false}
