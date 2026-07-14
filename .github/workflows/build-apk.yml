@@ -41,26 +41,7 @@ jobs:
         run: npx expo prebuild --platform android --clean
 
       - name: 🩹 Patch Kotlin compatibility (suppress Compose Compiler version check)
-        run: |
-          # Patch build.gradle to add suppressKotlinVersionCompatibilityCheck
-          if [ -f android/app/build.gradle ]; then
-            python3 - <<'PY'
-            import re
-            p = "android/app/build.gradle"
-            with open(p) as f: src = f.read()
-            if "suppressKotlinVersionCompatibilityCheck" not in src:
-                # Inject inside composeOptions block
-                src = re.sub(
-                    r"(composeOptions\s*\{)",
-                    r'\1\n        suppressKotlinVersionCompatibilityCheck = "1.9.24"',
-                    src,
-                )
-                with open(p, "w") as f: f.write(src)
-                print("Patched: suppressKotlinVersionCompatibilityCheck injected")
-            else:
-                print("Already patched")
-            PY
-          fi
+        run: python3 scripts/patch_gradle.py
 
       - name: 🔑 Generate debug keystore (no signing key needed for preview APK)
         run: |
