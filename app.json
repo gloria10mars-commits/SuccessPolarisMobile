@@ -27,7 +27,6 @@
       "output": "static",
       "favicon": "./assets/favicon.png"
     },
-    "plugins": ["expo-router"],
     "extra": {
       "eas": {
         "projectId": ""
