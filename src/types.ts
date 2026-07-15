@@ -54,3 +54,14 @@ export interface ChatMessage {
   text: string;
   timestamp: string;
 }
+
+export interface CachedDownload {
+  doc: Document;
+  downloadedAt: number;
+}
+
+export interface ViewHistoryItem {
+  doc: Document;
+  viewedAt: number;
+}
+

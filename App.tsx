@@ -1,6 +1,9 @@
 // App.tsx - SuccessPolaris Mobile (React Native / Expo)
 // Port 1:1 de la version web, adapté pour APK Android natif.
 // Aucune référence à Gemini - IA: Léon Astarte Engine.
+// Synchronisation automatique de la base dans le cache (màj hebdomadaire).
+// Suppression de la saisie d'email pour l'accès aux fonctionnalités.
+// Menu Hamburger avec Téléchargements en cache interne (Zéro accès externe) et Historique (auto-suppression 3j).
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
@@ -24,11 +27,13 @@ import PDFViewer from './src/components/PDFViewer';
 import ChatWidget from './src/components/ChatWidget';
 import SuccessPolarisAssistant from './src/components/SuccessPolarisAssistant';
 import AdminDashboard from './src/components/AdminDashboard';
-import EmailModal from './src/components/EmailModal';
 import AdminLoginModal from './src/components/AdminLoginModal';
+import HamburgerMenu from './src/components/HamburgerMenu';
+import DownloadsView from './src/components/DownloadsView';
+import HistoryView from './src/components/HistoryView';
 
 import { storageService } from './src/services/storageService';
-import { Category, Document, AdminAccount } from './src/types';
+import { Category, Document, AdminAccount, CachedDownload, ViewHistoryItem } from './src/types';
 import { COLORS, SPACING, RADIUS } from './src/theme/colors';
 
 const ADMIN_SECRET_CODE = 'mazedxn7';
@@ -44,23 +49,20 @@ const App: React.FC = () => {
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [loginError, setLoginError] = useState(false);
   const [isSyncing, setIsSyncing] = useState(true);
-  const [viewMode, setViewMode] = useState<'archives' | 'library'>('archives');
+  const [viewMode, setViewMode] = useState<'archives' | 'library' | 'downloads' | 'history'>('archives');
   const [showSuccessAssistant, setShowSuccessAssistant] = useState(false);
   const [showAI, setShowAI] = useState(false);
+  const [showHamburger, setShowHamburger] = useState(false);
 
   const [viewerDoc, setViewerDoc] = useState<Document | null>(null);
-  const [userEmail, setUserEmail] = useState('');
-  const [userCountry, setUserCountry] = useState('Togo');
-  const [showEmailModal, setShowEmailModal] = useState(false);
-  const [pendingDoc, setPendingDoc] = useState<Document | null>(null);
-  const [registrationIntent, setRegistrationIntent] = useState<
-    'document' | 'assistant' | 'ai' | null
-  >(null);
+  const [cachedDownloadsList, setCachedDownloadsList] = useState<CachedDownload[]>([]);
+  const [viewHistoryList, setViewHistoryList] = useState<ViewHistoryItem[]>([]);
 
-  const syncDocs = useCallback(async () => {
+  // Téléchargement / vérification du cache Sheets au lancement (màj automatique hebdomadaire)
+  const syncDocs = useCallback(async (force: boolean = false) => {
     setIsSyncing(true);
     try {
-      const data = await storageService.fetchFromSheets();
+      const data = await storageService.fetchFromSheets(force);
       if (data.documents.length > 0) {
         setCategories(data.categories);
         setDocuments(data.documents);
@@ -69,6 +71,11 @@ const App: React.FC = () => {
         const externalCount = await storageService.chargerCompteur();
         setTotalCount(externalCount);
       }
+      // Charger les listes internes de cache
+      const downloads = await storageService.getInternalDownloads();
+      setCachedDownloadsList(downloads);
+      const history = await storageService.getViewHistory();
+      setViewHistoryList(history);
     } catch (err) {
       console.error('Sync Error:', err);
     } finally {
@@ -77,136 +84,74 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    syncDocs();
+    syncDocs(false);
     storageService.logVisit();
-    storageService.getUserEmail().then((email) => {
-      if (email) setUserEmail(email);
-    });
-    storageService.getUserCountry().then((country) => {
-      if (country) setUserCountry(country);
-    });
   }, [syncDocs]);
 
+  // Consultation / Aperçu (sans saisie d'email)
   const handlePreview = async (doc: Document) => {
-    const email = await storageService.getUserEmail();
+    const email = (await storageService.getUserEmail()) || 'Utilisateur Libre';
     storageService.logPreview(email, doc.title);
+    await storageService.addToViewHistory(doc);
+    const updatedHistory = await storageService.getViewHistory();
+    setViewHistoryList(updatedHistory);
     setViewerDoc(doc);
   };
 
+  // Téléchargement dans le cache de l'application (Zéro accès externe) & Sans saisie d'email
   const handleObtain = async (doc: Document) => {
-    setPendingDoc(doc);
-    setRegistrationIntent('document');
-    const savedEmail = await storageService.getUserEmail();
-    const savedCountry = await storageService.getUserCountry();
+    const email = (await storageService.getUserEmail()) || 'Utilisateur Libre';
 
-    if (!savedEmail) {
-      setShowEmailModal(true);
-    } else {
-      const category = categories.find((c) => c.id === doc.categoryId);
-      storageService.sendToCloudLog({
-        type: 'ACCESS_DOCUMENT',
-        email: savedEmail,
-        country: savedCountry || 'Togo',
-        docId: doc.id,
-        docTitle: doc.title,
-        category: category?.name,
-        parentCategory: category?.parentId
-          ? categories.find((c) => c.id === category.parentId)?.name
-          : undefined,
-      });
-      processFullAccess(savedEmail, doc);
-    }
-  };
-
-  const handleAssistantClick = async () => {
-    const savedEmail = await storageService.getUserEmail();
-    const savedCountry = await storageService.getUserCountry();
-
-    if (!savedEmail) {
-      setRegistrationIntent('assistant');
-      setShowEmailModal(true);
-    } else {
-      storageService.sendToCloudLog({
-        type: 'ACCESS_ASSISTANT',
-        email: savedEmail,
-        country: savedCountry || 'Togo',
-      });
-      setShowSuccessAssistant(true);
-    }
-  };
-
-  const handleAIClick = async (): Promise<boolean> => {
-    const savedEmail = await storageService.getUserEmail();
-    const savedCountry = await storageService.getUserCountry();
-
-    if (!savedEmail) {
-      setRegistrationIntent('ai');
-      setShowEmailModal(true);
-      return false;
-    }
-
-    storageService.sendToCloudLog({
-      type: 'ACCESS_AI',
-      email: savedEmail,
-      country: savedCountry || 'Togo',
-    });
-    setShowAI(true);
-    return true;
-  };
-
-  const processFullAccess = async (email: string, doc: Document) => {
     const isBanned = await storageService.isEmailBanned(email);
     if (isBanned) {
       Alert.alert('Accès Révoqué', 'Votre identité a été bannie.');
       return;
     }
+
+    // Sauvegarde en cache interne (AsyncStorage / mémoire isolée de l'appli)
+    const updatedDownloads = await storageService.saveToInternalDownloads(doc);
+    setCachedDownloadsList(updatedDownloads);
+
+    // Ajout à l'historique des vus (auto-suppression 3j)
+    const updatedHistory = await storageService.addToViewHistory(doc);
+    setViewHistoryList(updatedHistory);
+
     storageService.logDownload(email, doc.title, doc.id);
     storageService.incrementDownload(doc.id);
+
+    // Ouvrir directement le document après téléchargement en cache
     setViewerDoc(doc);
+    Alert.alert(
+      'Téléchargé en Cache Interne',
+      `Le fichier "${doc.title}" a été téléchargé et mis en cache dans l'application. Vous pouvez y accéder et le gérer à tout moment depuis le menu "Téléchargements en Cache". Aucun accès extérieur requis.`
+    );
   };
 
-  const handleIdentityConfirm = async (email: string, country: string) => {
-    storageService.saveUserEmail(email);
-    storageService.saveUserCountry(country);
-    setUserEmail(email);
-    setUserCountry(country);
-
-    let logData: any = {
+  // Assistant & IA (Sans saisie d'email)
+  const handleAssistantClick = async () => {
+    const email = (await storageService.getUserEmail()) || 'Utilisateur Libre';
+    const country = (await storageService.getUserCountry()) || 'Togo';
+    storageService.sendToCloudLog({
+      type: 'ACCESS_ASSISTANT',
       email,
       country,
-      timestamp: new Date().toISOString(),
-    };
-
-    if (registrationIntent === 'document' && pendingDoc) {
-      logData.type = 'REGISTRATION_DOCUMENT';
-      logData.docId = pendingDoc.id;
-      logData.docTitle = pendingDoc.title;
-
-      const category = categories.find((c) => c.id === pendingDoc.categoryId);
-      if (category) {
-        logData.category = category.name;
-        if (category.parentId) {
-          const parent = categories.find((c) => c.id === category.parentId);
-          if (parent) logData.parentCategory = parent.name;
-        }
-      }
-
-      storageService.sendToCloudLog(logData);
-      processFullAccess(email, pendingDoc);
-    } else if (registrationIntent === 'assistant') {
-      logData.type = 'REGISTRATION_ASSISTANT';
-      storageService.sendToCloudLog(logData);
-      setShowSuccessAssistant(true);
-    } else if (registrationIntent === 'ai') {
-      logData.type = 'REGISTRATION_AI';
-      storageService.sendToCloudLog(logData);
-      setShowAI(true);
-    }
-
-    setShowEmailModal(false);
-    setRegistrationIntent(null);
+    });
+    setShowSuccessAssistant(true);
   };
 
+  const handleAIClick = async (): Promise<boolean> => {
+    const email = (await storageService.getUserEmail()) || 'Utilisateur Libre';
+    const country = (await storageService.getUserCountry()) || 'Togo';
+    storageService.sendToCloudLog({
+      type: 'ACCESS_AI',
+      email,
+      country,
+    });
+    setShowAI(true);
+    return true;
+  };
+
+  // Authentification terminal maître admin
   const handleAdminLogin = (code: string) => {
     if (code === ADMIN_SECRET_CODE) {
       setIsAdminMode(true);
@@ -238,22 +183,42 @@ const App: React.FC = () => {
   const displayedDocuments = useMemo(async () => {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      return documents.filter((d) => d.title.toLowerCase().includes(q));
+      return documents.filter((d) => d.title.toLowerCase().includes(q) || d.description.toLowerCase().includes(q));
     }
     if (viewMode === 'library') {
-      const history = await storageService.getUserHistory();
-      return documents.filter((doc) => history.includes(doc.id));
+      const historyIds = await storageService.getUserHistory();
+      return documents.filter((doc) => historyIds.includes(doc.id));
     }
     if (navigationPath.length === 0) return [];
     const lastCatId = navigationPath[navigationPath.length - 1].id;
     return documents.filter((doc) => doc.categoryId === lastCatId);
   }, [documents, navigationPath, searchQuery, viewMode]);
 
-  // Comme useMemo async ne fonctionne pas, on utilise un state séparé.
   const [resolvedDocs, setResolvedDocs] = useState<Document[]>([]);
   useEffect(() => {
     displayedDocuments.then(setResolvedDocs);
   }, [displayedDocuments]);
+
+  // Actions cache interne depuis le menu
+  const handleRemoveDownload = async (docId: string) => {
+    const updated = await storageService.removeInternalDownload(docId);
+    setCachedDownloadsList(updated);
+  };
+
+  const handleClearAllDownloads = async () => {
+    await storageService.clearInternalDownloads();
+    setCachedDownloadsList([]);
+  };
+
+  const handleRemoveHistoryItem = async (docId: string) => {
+    const updated = await storageService.removeViewHistoryItem(docId);
+    setViewHistoryList(updated);
+  };
+
+  const handleClearAllHistory = async () => {
+    await storageService.clearViewHistory();
+    setViewHistoryList([]);
+  };
 
   return (
     <SafeAreaProvider>
@@ -281,6 +246,18 @@ const App: React.FC = () => {
 
         <PDFViewer doc={viewerDoc} onClose={() => setViewerDoc(null)} />
 
+        {/* Menu Hamburger */}
+        <HamburgerMenu
+          visible={showHamburger}
+          onClose={() => setShowHamburger(false)}
+          currentMode={viewMode}
+          onSelectMode={(mode) => {
+            setViewMode(mode);
+            setSearchQuery('');
+          }}
+          onForceSync={() => syncDocs(true)}
+        />
+
         <SafeAreaView style={styles.safe}>
           <ScrollView
             style={styles.scroll}
@@ -289,20 +266,32 @@ const App: React.FC = () => {
           >
             {!isAdminMode ? (
               <>
-                {/* Header */}
+                {/* Header avec bouton Hamburger */}
                 <View style={styles.header}>
-                  <TouchableOpacity
-                    style={styles.logoWrapper}
-                    onPress={() => navigateTo(null)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={styles.logoBox}>
-                      <Text style={styles.logoIcon}>⚛️</Text>
-                    </View>
-                    <Text style={styles.logoText}>
-                      Success<Text style={styles.logoAccent}>Polaris</Text>
-                    </Text>
-                  </TouchableOpacity>
+                  <View style={styles.headerTopRow}>
+                    <TouchableOpacity
+                      style={styles.hamburgerBtn}
+                      onPress={() => setShowHamburger(true)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.hamburgerIcon}>☰</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.logoWrapper}
+                      onPress={() => navigateTo(null)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={styles.logoBox}>
+                        <Text style={styles.logoIcon}>⚛️</Text>
+                      </View>
+                      <Text style={styles.logoText}>
+                        Success<Text style={styles.logoAccent}>Polaris</Text>
+                      </Text>
+                    </TouchableOpacity>
+
+                    <View style={{ width: 44 }} /> {/* Équilibre visuel */}
+                  </View>
 
                   <View style={styles.headerActions}>
                     <TouchableOpacity
@@ -326,7 +315,7 @@ const App: React.FC = () => {
                   </View>
                 </View>
 
-                {/* Search */}
+                {/* Recherche */}
                 <View style={styles.searchWrapper}>
                   <View style={styles.searchBox}>
                     <Text style={styles.searchIcon}>🔍</Text>
@@ -340,8 +329,8 @@ const App: React.FC = () => {
                   </View>
                 </View>
 
-                {/* Nav tabs */}
-                {!searchQuery && (
+                {/* Nav tabs principale */}
+                {!searchQuery && viewMode !== 'downloads' && viewMode !== 'history' && (
                   <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
@@ -398,46 +387,65 @@ const App: React.FC = () => {
                   </ScrollView>
                 )}
 
-                {/* Categories sidebar */}
-                {viewMode === 'archives' && !searchQuery && currentLevelCategories.length > 0 && (
-                  <View style={styles.categoriesRow}>
-                    {currentLevelCategories.map((cat) => (
-                      <TouchableOpacity
-                        key={cat.id}
-                        onPress={() => navigateTo(cat)}
-                        style={styles.categoryBtn}
-                        activeOpacity={0.7}
-                      >
-                        <Text style={styles.categoryText}>{cat.name}</Text>
-                        <Text style={styles.categoryArrow}>›</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
+                {/* Affichage des Vues spécialisées */}
+                {viewMode === 'downloads' ? (
+                  <DownloadsView
+                    downloads={cachedDownloadsList}
+                    onPreview={handlePreview}
+                    onRemove={handleRemoveDownload}
+                    onClearAll={handleClearAllDownloads}
+                  />
+                ) : viewMode === 'history' ? (
+                  <HistoryView
+                    history={viewHistoryList}
+                    onPreview={handlePreview}
+                    onRemove={handleRemoveHistoryItem}
+                    onClearAll={handleClearAllHistory}
+                  />
+                ) : (
+                  <>
+                    {/* Categories sidebar / grid */}
+                    {viewMode === 'archives' && !searchQuery && currentLevelCategories.length > 0 && (
+                      <View style={styles.categoriesRow}>
+                        {currentLevelCategories.map((cat) => (
+                          <TouchableOpacity
+                            key={cat.id}
+                            onPress={() => navigateTo(cat)}
+                            style={styles.categoryBtn}
+                            activeOpacity={0.7}
+                          >
+                            <Text style={styles.categoryText}>{cat.name}</Text>
+                            <Text style={styles.categoryArrow}>›</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
 
-                {/* Documents grid */}
-                <View style={styles.docsGrid}>
-                  {isSyncing ? (
-                    <View style={styles.loadingBox}>
-                      <ActivityIndicator size="large" color={COLORS.primary} />
-                      <Text style={styles.loadingText}>Synchronisation...</Text>
+                    {/* Documents grid */}
+                    <View style={styles.docsGrid}>
+                      {isSyncing ? (
+                        <View style={styles.loadingBox}>
+                          <ActivityIndicator size="large" color={COLORS.primary} />
+                          <Text style={styles.loadingText}>Synchronisation...</Text>
+                        </View>
+                      ) : resolvedDocs.length > 0 ? (
+                        resolvedDocs.map((doc) => (
+                          <DocumentCard
+                            key={doc.id}
+                            doc={doc}
+                            onPreview={handlePreview}
+                            onDownload={handleObtain}
+                          />
+                        ))
+                      ) : (
+                        <View style={styles.emptyBox}>
+                          <Text style={styles.emptyIcon}>📡</Text>
+                          <Text style={styles.emptyText}>Aucune donnée ou archive sélectionnée</Text>
+                        </View>
+                      )}
                     </View>
-                  ) : resolvedDocs.length > 0 ? (
-                    resolvedDocs.map((doc) => (
-                      <DocumentCard
-                        key={doc.id}
-                        doc={doc}
-                        onPreview={handlePreview}
-                        onDownload={handleObtain}
-                      />
-                    ))
-                  ) : (
-                    <View style={styles.emptyBox}>
-                      <Text style={styles.emptyIcon}>📡</Text>
-                      <Text style={styles.emptyText}>Aucune donnée</Text>
-                    </View>
-                  )}
-                </View>
+                  </>
+                )}
               </>
             ) : (
               <View style={styles.adminWrapper}>
@@ -455,7 +463,7 @@ const App: React.FC = () => {
                   categories={categories}
                   documents={documents}
                   currentAdmin={currentAdmin}
-                  onRefresh={syncDocs}
+                  onRefresh={() => syncDocs(true)}
                 />
               </View>
             )}
@@ -468,15 +476,7 @@ const App: React.FC = () => {
           <Text style={styles.footerRight}>Système Sécurisé</Text>
         </View>
 
-        {/* Modals */}
-        <EmailModal
-          visible={showEmailModal}
-          initialEmail={userEmail}
-          initialCountry={userCountry}
-          onConfirm={handleIdentityConfirm}
-          onCancel={() => setShowEmailModal(false)}
-        />
-
+        {/* Modal Connexion Admin */}
         <AdminLoginModal
           visible={showAdminLogin}
           onConfirm={handleAdminLogin}
@@ -507,8 +507,29 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'column',
     alignItems: 'center',
-    gap: SPACING.xl,
+    gap: SPACING.lg,
     marginBottom: SPACING.xl,
+  },
+  headerTopRow: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  hamburgerBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: RADIUS.sm,
+    backgroundColor: 'rgba(0, 212, 255, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 212, 255, 0.25)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  hamburgerIcon: {
+    color: COLORS.primary,
+    fontSize: 22,
+    fontWeight: 'bold',
   },
   logoWrapper: {
     alignItems: 'center',
@@ -701,10 +722,9 @@ const styles = StyleSheet.create({
     fontSize: 18,
   },
   docsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    flexDirection: 'column',
     gap: SPACING.md,
-    justifyContent: 'space-between',
+    width: '100%',
   },
   loadingBox: {
     width: '100%',

@@ -1,8 +1,10 @@
 // storageService - Version React Native (AsyncStorage)
 // Identique en surface à la version web, mais persistant côté device.
+// Synchronisation hybride avec mise en cache transparente hebdomadaire (fin de semaine / 7 jours).
+// Stockage interne sécurisé des téléchargements et de l'historique (auto-suppression 3 jours).
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Category, Document, AdminAccount, VisitorActivity } from '../types';
+import { Category, Document, AdminAccount, VisitorActivity, CachedDownload, ViewHistoryItem } from '../types';
 import { URL_COMPTEUR, URL_LISTE_DOCUMENTS, APPS_SCRIPT_WEBHOOK_URL } from '../constants';
 
 const KEYS = {
@@ -20,6 +22,9 @@ const KEYS = {
   SHEET_ROW_COUNT: 'sp_document_total_count',
   IA_DIRECTIVES: 'sp_ia_directives',
   IA_NOTES: 'sp_ia_notes',
+  LAST_DB_SYNC_TIME: 'sp_last_db_sync_time',
+  INTERNAL_DOWNLOADS: 'sp_internal_downloads',
+  VIEW_HISTORY: 'sp_view_history',
 } as const;
 
 const parseCSV = (csv: string) => {
@@ -79,9 +84,28 @@ export const storageService = {
     }
   },
 
-  // ----- Synchronisation Google Sheets -----
-  fetchFromSheets: async (): Promise<{ categories: Category[]; documents: Document[] }> => {
+  // ----- Synchronisation Google Sheets et Cache Interne -----
+  // Télécharge la feuille, la met dans le cache de l'application de façon transparente.
+  // Une mise à jour s'effectue automatiquement chaque semaine (ou si le cache est vide).
+  fetchFromSheets: async (forceSync: boolean = false): Promise<{ categories: Category[]; documents: Document[] }> => {
     try {
+      const catsRaw = await safeGet(KEYS.CATEGORIES);
+      const docsRaw = await safeGet(KEYS.DOCUMENTS);
+      const lastSyncRaw = await safeGet(KEYS.LAST_DB_SYNC_TIME);
+      const lastSync = lastSyncRaw ? parseInt(lastSyncRaw) : 0;
+      const now = Date.now();
+      const oneWeekMs = 7 * 24 * 60 * 60 * 1000; // 7 jours (une semaine)
+
+      // Si le cache existe déjà, et que ça fait moins de 7 jours (et qu'on n'a pas forcé la synchro)
+      // Alors on charge directement depuis le cache local sans exposition externe ni réseau requis !
+      if (!forceSync && catsRaw && docsRaw && (now - lastSync < oneWeekMs)) {
+        return {
+          categories: JSON.parse(catsRaw),
+          documents: JSON.parse(docsRaw),
+        };
+      }
+
+      // Sinon, on télécharge la dernière version de la feuille Sheet et on écrase l'ancien cache
       const response = await fetch(`${URL_LISTE_DOCUMENTS}&t=${Date.now()}`);
       if (!response.ok) throw new Error('Source inaccessible');
       const csvData = await response.text();
@@ -122,8 +146,12 @@ export const storageService = {
           size: 'PDF',
         });
       });
+
       await safeSet(KEYS.DOCUMENTS, JSON.stringify(documents));
       await safeSet(KEYS.CATEGORIES, JSON.stringify(categories));
+      await safeSet(KEYS.LAST_DB_SYNC_TIME, now.toString());
+      await storageService.addLog('SYSTEM', 'Base de données Sheet synchronisée et mise en cache');
+
       return { categories, documents };
     } catch (error) {
       const catsRaw = await safeGet(KEYS.CATEGORIES);
@@ -139,6 +167,72 @@ export const storageService = {
     if (!url || !url.includes('drive.google.com')) return url;
     const idMatch = url.match(/\/d\/([a-zA-Z0-9_-]+)/) || url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
     return idMatch ? `https://drive.google.com/file/d/${idMatch[1]}/preview` : url;
+  },
+
+  // ----- Gestion des Téléchargements (Cache Interne, pas d'accès externe) -----
+  saveToInternalDownloads: async (doc: Document): Promise<CachedDownload[]> => {
+    const raw = await safeGet(KEYS.INTERNAL_DOWNLOADS);
+    const list: CachedDownload[] = raw ? JSON.parse(raw) : [];
+    if (!list.some((item) => item.doc.id === doc.id)) {
+      list.unshift({ doc, downloadedAt: Date.now() });
+      await safeSet(KEYS.INTERNAL_DOWNLOADS, JSON.stringify(list));
+      await storageService.addLog('UPLOAD', `Fichier mis en cache interne : ${doc.title}`);
+    }
+    return list;
+  },
+
+  getInternalDownloads: async (): Promise<CachedDownload[]> => {
+    const raw = await safeGet(KEYS.INTERNAL_DOWNLOADS);
+    return raw ? JSON.parse(raw) : [];
+  },
+
+  removeInternalDownload: async (docId: string): Promise<CachedDownload[]> => {
+    const raw = await safeGet(KEYS.INTERNAL_DOWNLOADS);
+    const list: CachedDownload[] = raw ? JSON.parse(raw) : [];
+    const updated = list.filter((item) => item.doc.id !== docId);
+    await safeSet(KEYS.INTERNAL_DOWNLOADS, JSON.stringify(updated));
+    return updated;
+  },
+
+  clearInternalDownloads: async (): Promise<void> => {
+    await safeSet(KEYS.INTERNAL_DOWNLOADS, JSON.stringify([]));
+  },
+
+  // ----- Gestion de l'Historique des documents vus (Auto-suppression 3 jours) -----
+  purgeExpiredViewHistory: async (): Promise<ViewHistoryItem[]> => {
+    const raw = await safeGet(KEYS.VIEW_HISTORY);
+    if (!raw) return [];
+    const list: ViewHistoryItem[] = JSON.parse(raw);
+    const now = Date.now();
+    const threeDaysMs = 3 * 24 * 60 * 60 * 1000; // Délai d'auto-suppression de 3 jours
+    const valid = list.filter((item) => (now - item.viewedAt) <= threeDaysMs);
+    if (valid.length !== list.length) {
+      await safeSet(KEYS.VIEW_HISTORY, JSON.stringify(valid));
+    }
+    return valid;
+  },
+
+  addToViewHistory: async (doc: Document): Promise<ViewHistoryItem[]> => {
+    let list = await storageService.purgeExpiredViewHistory();
+    list = list.filter((item) => item.doc.id !== doc.id);
+    list.unshift({ doc, viewedAt: Date.now() });
+    await safeSet(KEYS.VIEW_HISTORY, JSON.stringify(list));
+    return list;
+  },
+
+  getViewHistory: async (): Promise<ViewHistoryItem[]> => {
+    return await storageService.purgeExpiredViewHistory();
+  },
+
+  removeViewHistoryItem: async (docId: string): Promise<ViewHistoryItem[]> => {
+    let list = await storageService.purgeExpiredViewHistory();
+    list = list.filter((item) => item.doc.id !== docId);
+    await safeSet(KEYS.VIEW_HISTORY, JSON.stringify(list));
+    return list;
+  },
+
+  clearViewHistory: async (): Promise<void> => {
+    await safeSet(KEYS.VIEW_HISTORY, JSON.stringify([]));
   },
 
   // ----- XP -----
@@ -227,7 +321,9 @@ export const storageService = {
     }
     activities.forEach((act) => {
       const dateStr = act.timestamp.split(' ')[0];
-      if (dailyStats.hasOwnProperty(dateStr)) dailyStats[dateStr]++;
+      if (dailyStats.hasOwnProperty(dateStr)) {
+        dailyStats[dateStr]++;
+      }
     });
     return {
       topDocs,
@@ -274,7 +370,7 @@ export const storageService = {
   logVisit: async (): Promise<void> => {
     const v = await safeGet(KEYS.VISITOR_ACTIVITY);
     const activities: VisitorActivity[] = v ? JSON.parse(v) : [];
-    const email = (await storageService.getUserEmail()) || 'Anonyme';
+    const email = (await storageService.getUserEmail()) || 'Utilisateur Libre';
     await safeSet(
       KEYS.VISITOR_ACTIVITY,
       JSON.stringify(
@@ -301,7 +397,7 @@ export const storageService = {
           {
             id: `p-${Date.now()}`,
             type: 'PREVIEW',
-            email: email || 'Anonyme',
+            email: email || 'Utilisateur Libre',
             fileName,
             timestamp: new Date().toLocaleString(),
           },
@@ -321,7 +417,7 @@ export const storageService = {
           {
             id: `d-${Date.now()}`,
             type: 'DOWNLOAD',
-            email,
+            email: email || 'Utilisateur Libre',
             fileName,
             timestamp: new Date().toLocaleString(),
           },
