@@ -1,9 +1,8 @@
 // App.tsx - SuccessPolaris Mobile (React Native / Expo)
 // Port 1:1 de la version web, adapté pour APK Android natif.
-// Aucune référence à Gemini - IA: Léon Astarte Engine.
-// Synchronisation automatique de la base dans le cache (màj hebdomadaire).
-// Suppression de la saisie d'email pour l'accès aux fonctionnalités.
-// Menu Hamburger avec Téléchargements en cache interne (Zéro accès externe) et Historique (auto-suppression 3j).
+// Page blanche d'initialisation SUCCESS POLARIS (Astarte Studio).
+// Suppression du bouton Aperçu sur les cartes -> Uniquement "Télécharger le Document".
+// Visionneur Astral à 2 moteurs (Drive Natif & Universel) en cas de blocage réseau/DNS.
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
@@ -31,6 +30,7 @@ import AdminLoginModal from './src/components/AdminLoginModal';
 import HamburgerMenu from './src/components/HamburgerMenu';
 import DownloadsView from './src/components/DownloadsView';
 import HistoryView from './src/components/HistoryView';
+import SplashScreen from './src/components/SplashScreen';
 
 import { storageService } from './src/services/storageService';
 import { Category, Document, AdminAccount, CachedDownload, ViewHistoryItem } from './src/types';
@@ -39,6 +39,7 @@ import { COLORS, SPACING, RADIUS } from './src/theme/colors';
 const ADMIN_SECRET_CODE = 'mazedxn7';
 
 const App: React.FC = () => {
+  const [showSplash, setShowSplash] = useState(true);
   const [categories, setCategories] = useState<Category[]>([]);
   const [documents, setDocuments] = useState<Document[]>([]);
   const [totalCount, setTotalCount] = useState(0);
@@ -71,7 +72,6 @@ const App: React.FC = () => {
         const externalCount = await storageService.chargerCompteur();
         setTotalCount(externalCount);
       }
-      // Charger les listes internes de cache
       const downloads = await storageService.getInternalDownloads();
       setCachedDownloadsList(downloads);
       const history = await storageService.getViewHistory();
@@ -88,7 +88,7 @@ const App: React.FC = () => {
     storageService.logVisit();
   }, [syncDocs]);
 
-  // Consultation / Aperçu (sans saisie d'email)
+  // Consultation directement dans le Visionneur Astral (depuis Téléchargements en cache ou Historique)
   const handlePreview = async (doc: Document) => {
     const email = (await storageService.getUserEmail()) || 'Utilisateur Libre';
     storageService.logPreview(email, doc.title);
@@ -98,7 +98,7 @@ const App: React.FC = () => {
     setViewerDoc(doc);
   };
 
-  // Téléchargement dans le cache de l'application (Zéro accès externe) & Sans saisie d'email
+  // Téléchargement dans le cache de l'application & Ouverture instantanée dans le Visionneur Astral
   const handleObtain = async (doc: Document) => {
     const email = (await storageService.getUserEmail()) || 'Utilisateur Libre';
 
@@ -108,7 +108,7 @@ const App: React.FC = () => {
       return;
     }
 
-    // Sauvegarde en cache interne (AsyncStorage / mémoire isolée de l'appli)
+    // Sauvegarde dans la mémoire cache interne isolée de l'application
     const updatedDownloads = await storageService.saveToInternalDownloads(doc);
     setCachedDownloadsList(updatedDownloads);
 
@@ -119,12 +119,8 @@ const App: React.FC = () => {
     storageService.logDownload(email, doc.title, doc.id);
     storageService.incrementDownload(doc.id);
 
-    // Ouvrir directement le document après téléchargement en cache
+    // Le fichier est lu par l'application jouant le rôle de visionneur de documents
     setViewerDoc(doc);
-    Alert.alert(
-      'Téléchargé en Cache Interne',
-      `Le fichier "${doc.title}" a été téléchargé et mis en cache dans l'application. Vous pouvez y accéder et le gérer à tout moment depuis le menu "Téléchargements en Cache". Aucun accès extérieur requis.`
-    );
   };
 
   // Assistant & IA (Sans saisie d'email)
@@ -222,268 +218,273 @@ const App: React.FC = () => {
 
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle="light-content" backgroundColor="#020617" />
-      <View style={styles.root}>
-        <AuroraBackground />
-        <ExamCountdown onAdminAccess={() => setShowAdminLogin(true)} />
+      <StatusBar barStyle={showSplash ? 'dark-content' : 'light-content'} backgroundColor={showSplash ? '#ffffff' : '#020617'} />
+      
+      {showSplash ? (
+        <SplashScreen onFinish={() => setShowSplash(false)} />
+      ) : (
+        <View style={styles.root}>
+          <AuroraBackground />
+          <ExamCountdown onAdminAccess={() => setShowAdminLogin(true)} />
 
-        {!isAdminMode && (
-          <ChatWidget
-            documents={documents}
-            onOpen={() => {
-              handleAIClick();
-              return true;
-            }}
-            isOpen={showAI}
-            onClose={() => setShowAI(false)}
+          {!isAdminMode && (
+            <ChatWidget
+              documents={documents}
+              onOpen={() => {
+                handleAIClick();
+                return true;
+              }}
+              isOpen={showAI}
+              onClose={() => setShowAI(false)}
+            />
+          )}
+
+          <SuccessPolarisAssistant
+            isOpen={showSuccessAssistant}
+            onClose={() => setShowSuccessAssistant(false)}
           />
-        )}
 
-        <SuccessPolarisAssistant
-          isOpen={showSuccessAssistant}
-          onClose={() => setShowSuccessAssistant(false)}
-        />
+          {/* Visionneur Astral de Documents */}
+          <PDFViewer doc={viewerDoc} onClose={() => setViewerDoc(null)} />
 
-        <PDFViewer doc={viewerDoc} onClose={() => setViewerDoc(null)} />
+          {/* Menu Hamburger */}
+          <HamburgerMenu
+            visible={showHamburger}
+            onClose={() => setShowHamburger(false)}
+            currentMode={viewMode}
+            onSelectMode={(mode) => {
+              setViewMode(mode);
+              setSearchQuery('');
+            }}
+            onForceSync={() => syncDocs(true)}
+          />
 
-        {/* Menu Hamburger */}
-        <HamburgerMenu
-          visible={showHamburger}
-          onClose={() => setShowHamburger(false)}
-          currentMode={viewMode}
-          onSelectMode={(mode) => {
-            setViewMode(mode);
-            setSearchQuery('');
-          }}
-          onForceSync={() => syncDocs(true)}
-        />
-
-        <SafeAreaView style={styles.safe}>
-          <ScrollView
-            style={styles.scroll}
-            contentContainerStyle={styles.scrollContent}
-            showsVerticalScrollIndicator={false}
-          >
-            {!isAdminMode ? (
-              <>
-                {/* Header avec bouton Hamburger */}
-                <View style={styles.header}>
-                  <View style={styles.headerTopRow}>
-                    <TouchableOpacity
-                      style={styles.hamburgerBtn}
-                      onPress={() => setShowHamburger(true)}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.hamburgerIcon}>☰</Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                      style={styles.logoWrapper}
-                      onPress={() => navigateTo(null)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={styles.logoBox}>
-                        <Text style={styles.logoIcon}>⚛️</Text>
-                      </View>
-                      <Text style={styles.logoText}>
-                        Success<Text style={styles.logoAccent}>Polaris</Text>
-                      </Text>
-                    </TouchableOpacity>
-
-                    <View style={{ width: 44 }} /> {/* Équilibre visuel */}
-                  </View>
-
-                  <View style={styles.headerActions}>
-                    <TouchableOpacity
-                      onPress={handleAssistantClick}
-                      style={styles.assistantBtn}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.assistantIcon}>🤖</Text>
-                      <Text style={styles.assistantBtnText}>Assistant</Text>
-                    </TouchableOpacity>
-
-                    <View style={styles.counterBox}>
-                      <View style={styles.counterIcon}>
-                        <Text style={styles.counterIconText}>💾</Text>
-                      </View>
-                      <View>
-                        <Text style={styles.counterLabel}>Flux Archives</Text>
-                        <Text style={styles.counterValue}>{totalCount} items</Text>
-                      </View>
-                    </View>
-                  </View>
-                </View>
-
-                {/* Recherche */}
-                <View style={styles.searchWrapper}>
-                  <View style={styles.searchBox}>
-                    <Text style={styles.searchIcon}>🔍</Text>
-                    <TextInput
-                      value={searchQuery}
-                      onChangeText={setSearchQuery}
-                      placeholder="Explorer avec Léon Astarte..."
-                      placeholderTextColor="rgba(255, 255, 255, 0.20)"
-                      style={styles.searchInput}
-                    />
-                  </View>
-                </View>
-
-                {/* Nav tabs principale */}
-                {!searchQuery && viewMode !== 'downloads' && viewMode !== 'history' && (
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    style={styles.navScroll}
-                    contentContainerStyle={styles.navScrollContent}
-                  >
-                    <TouchableOpacity
-                      onPress={() => {
-                        setViewMode('archives');
-                        setNavigationPath([]);
-                      }}
-                      style={[
-                        styles.navBtn,
-                        viewMode === 'archives' && navigationPath.length === 0 && styles.navBtnActive,
-                      ]}
-                      activeOpacity={0.7}
-                    >
-                      <Text
-                        style={[
-                          styles.navBtnText,
-                          viewMode === 'archives' && navigationPath.length === 0 && styles.navBtnTextActive,
-                        ]}
-                      >
-                        Secteurs
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => setViewMode('library')}
-                      style={[
-                        styles.navBtn,
-                        viewMode === 'library' && styles.navBtnActive,
-                      ]}
-                      activeOpacity={0.7}
-                    >
-                      <Text
-                        style={[
-                          styles.navBtnText,
-                          viewMode === 'library' && styles.navBtnTextActive,
-                        ]}
-                      >
-                        Mon Index
-                      </Text>
-                    </TouchableOpacity>
-                    {navigationPath.map((cat, i) => (
+          <SafeAreaView style={styles.safe}>
+            <ScrollView
+              style={styles.scroll}
+              contentContainerStyle={styles.scrollContent}
+              showsVerticalScrollIndicator={false}
+            >
+              {!isAdminMode ? (
+                <>
+                  {/* Header avec bouton Hamburger */}
+                  <View style={styles.header}>
+                    <View style={styles.headerTopRow}>
                       <TouchableOpacity
-                        key={cat.id}
-                        onPress={() => setNavigationPath(navigationPath.slice(0, i + 1))}
-                        style={styles.navBreadcrumb}
+                        style={styles.hamburgerBtn}
+                        onPress={() => setShowHamburger(true)}
                         activeOpacity={0.7}
                       >
-                        <Text style={styles.navBreadcrumbText}>{cat.name}</Text>
+                        <Text style={styles.hamburgerIcon}>☰</Text>
                       </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                )}
 
-                {/* Affichage des Vues spécialisées */}
-                {viewMode === 'downloads' ? (
-                  <DownloadsView
-                    downloads={cachedDownloadsList}
-                    onPreview={handlePreview}
-                    onRemove={handleRemoveDownload}
-                    onClearAll={handleClearAllDownloads}
-                  />
-                ) : viewMode === 'history' ? (
-                  <HistoryView
-                    history={viewHistoryList}
-                    onPreview={handlePreview}
-                    onRemove={handleRemoveHistoryItem}
-                    onClearAll={handleClearAllHistory}
-                  />
-                ) : (
-                  <>
-                    {/* Categories sidebar / grid */}
-                    {viewMode === 'archives' && !searchQuery && currentLevelCategories.length > 0 && (
-                      <View style={styles.categoriesRow}>
-                        {currentLevelCategories.map((cat) => (
-                          <TouchableOpacity
-                            key={cat.id}
-                            onPress={() => navigateTo(cat)}
-                            style={styles.categoryBtn}
-                            activeOpacity={0.7}
-                          >
-                            <Text style={styles.categoryText}>{cat.name}</Text>
-                            <Text style={styles.categoryArrow}>›</Text>
-                          </TouchableOpacity>
-                        ))}
-                      </View>
-                    )}
-
-                    {/* Documents grid */}
-                    <View style={styles.docsGrid}>
-                      {isSyncing ? (
-                        <View style={styles.loadingBox}>
-                          <ActivityIndicator size="large" color={COLORS.primary} />
-                          <Text style={styles.loadingText}>Synchronisation...</Text>
+                      <TouchableOpacity
+                        style={styles.logoWrapper}
+                        onPress={() => navigateTo(null)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={styles.logoBox}>
+                          <Text style={styles.logoIcon}>⚛️</Text>
                         </View>
-                      ) : resolvedDocs.length > 0 ? (
-                        resolvedDocs.map((doc) => (
-                          <DocumentCard
-                            key={doc.id}
-                            doc={doc}
-                            onPreview={handlePreview}
-                            onDownload={handleObtain}
-                          />
-                        ))
-                      ) : (
-                        <View style={styles.emptyBox}>
-                          <Text style={styles.emptyIcon}>📡</Text>
-                          <Text style={styles.emptyText}>Aucune donnée ou archive sélectionnée</Text>
+                        <Text style={styles.logoText}>
+                          Success<Text style={styles.logoAccent}>Polaris</Text>
+                        </Text>
+                      </TouchableOpacity>
+
+                      <View style={{ width: 44 }} />
+                    </View>
+
+                    <View style={styles.headerActions}>
+                      <TouchableOpacity
+                        onPress={handleAssistantClick}
+                        style={styles.assistantBtn}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.assistantIcon}>🤖</Text>
+                        <Text style={styles.assistantBtnText}>Assistant</Text>
+                      </TouchableOpacity>
+
+                      <View style={styles.counterBox}>
+                        <View style={styles.counterIcon}>
+                          <Text style={styles.counterIconText}>💾</Text>
+                        </View>
+                        <View>
+                          <Text style={styles.counterLabel}>Flux Archives</Text>
+                          <Text style={styles.counterValue}>{totalCount} items</Text>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+
+                  {/* Recherche */}
+                  <View style={styles.searchWrapper}>
+                    <View style={styles.searchBox}>
+                      <Text style={styles.searchIcon}>🔍</Text>
+                      <TextInput
+                        value={searchQuery}
+                        onChangeText={setSearchQuery}
+                        placeholder="Explorer avec Léon Astarte..."
+                        placeholderTextColor="rgba(255, 255, 255, 0.20)"
+                        style={styles.searchInput}
+                      />
+                    </View>
+                  </View>
+
+                  {/* Nav tabs principale */}
+                  {!searchQuery && viewMode !== 'downloads' && viewMode !== 'history' && (
+                    <ScrollView
+                      horizontal
+                      showsHorizontalScrollIndicator={false}
+                      style={styles.navScroll}
+                      contentContainerStyle={styles.navScrollContent}
+                    >
+                      <TouchableOpacity
+                        onPress={() => {
+                          setViewMode('archives');
+                          setNavigationPath([]);
+                        }}
+                        style={[
+                          styles.navBtn,
+                          viewMode === 'archives' && navigationPath.length === 0 && styles.navBtnActive,
+                        ]}
+                        activeOpacity={0.7}
+                      >
+                        <Text
+                          style={[
+                            styles.navBtnText,
+                            viewMode === 'archives' && navigationPath.length === 0 && styles.navBtnTextActive,
+                          ]}
+                        >
+                          Secteurs
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => setViewMode('library')}
+                        style={[
+                          styles.navBtn,
+                          viewMode === 'library' && styles.navBtnActive,
+                        ]}
+                        activeOpacity={0.7}
+                      >
+                        <Text
+                          style={[
+                            styles.navBtnText,
+                            viewMode === 'library' && styles.navBtnTextActive,
+                          ]}
+                        >
+                          Mon Index
+                        </Text>
+                      </TouchableOpacity>
+                      {navigationPath.map((cat, i) => (
+                        <TouchableOpacity
+                          key={cat.id}
+                          onPress={() => setNavigationPath(navigationPath.slice(0, i + 1))}
+                          style={styles.navBreadcrumb}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.navBreadcrumbText}>{cat.name}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                  )}
+
+                  {/* Affichage des Vues spécialisées */}
+                  {viewMode === 'downloads' ? (
+                    <DownloadsView
+                      downloads={cachedDownloadsList}
+                      onPreview={handlePreview}
+                      onRemove={handleRemoveDownload}
+                      onClearAll={handleClearAllDownloads}
+                    />
+                  ) : viewMode === 'history' ? (
+                    <HistoryView
+                      history={viewHistoryList}
+                      onPreview={handlePreview}
+                      onRemove={handleRemoveHistoryItem}
+                      onClearAll={handleClearAllHistory}
+                    />
+                  ) : (
+                    <>
+                      {/* Categories sidebar / grid */}
+                      {viewMode === 'archives' && !searchQuery && currentLevelCategories.length > 0 && (
+                        <View style={styles.categoriesRow}>
+                          {currentLevelCategories.map((cat) => (
+                            <TouchableOpacity
+                              key={cat.id}
+                              onPress={() => navigateTo(cat)}
+                              style={styles.categoryBtn}
+                              activeOpacity={0.7}
+                            >
+                              <Text style={styles.categoryText}>{cat.name}</Text>
+                              <Text style={styles.categoryArrow}>›</Text>
+                            </TouchableOpacity>
+                          ))}
                         </View>
                       )}
-                    </View>
-                  </>
-                )}
-              </>
-            ) : (
-              <View style={styles.adminWrapper}>
-                <View style={styles.adminHeader}>
-                  <TouchableOpacity
-                    onPress={() => setIsAdminMode(false)}
-                    style={styles.exitAdminBtn}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.exitAdminText}>← Quitter la Matrice</Text>
-                  </TouchableOpacity>
-                  <Text style={styles.adminHeaderLabel}>Terminal Maître</Text>
+
+                      {/* Documents grid (Uniquement bouton Télécharger) */}
+                      <View style={styles.docsGrid}>
+                        {isSyncing ? (
+                          <View style={styles.loadingBox}>
+                            <ActivityIndicator size="large" color={COLORS.primary} />
+                            <Text style={styles.loadingText}>Synchronisation...</Text>
+                          </View>
+                        ) : resolvedDocs.length > 0 ? (
+                          resolvedDocs.map((doc) => (
+                            <DocumentCard
+                              key={doc.id}
+                              doc={doc}
+                              onDownload={handleObtain}
+                            />
+                          ))
+                        ) : (
+                          <View style={styles.emptyBox}>
+                            <Text style={styles.emptyIcon}>📡</Text>
+                            <Text style={styles.emptyText}>Aucune archive sélectionnée dans ce secteur</Text>
+                          </View>
+                        )}
+                      </View>
+                    </>
+                  )}
+                </>
+              ) : (
+                <View style={styles.adminWrapper}>
+                  <View style={styles.adminHeader}>
+                    <TouchableOpacity
+                      onPress={() => setIsAdminMode(false)}
+                      style={styles.exitAdminBtn}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.exitAdminText}>← Quitter la Matrice</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.adminHeaderLabel}>Terminal Maître</Text>
+                  </View>
+                  <AdminDashboard
+                    categories={categories}
+                    documents={documents}
+                    currentAdmin={currentAdmin}
+                    onRefresh={() => syncDocs(true)}
+                  />
                 </View>
-                <AdminDashboard
-                  categories={categories}
-                  documents={documents}
-                  currentAdmin={currentAdmin}
-                  onRefresh={() => syncDocs(true)}
-                />
-              </View>
-            )}
-          </ScrollView>
-        </SafeAreaView>
+              )}
+            </ScrollView>
+          </SafeAreaView>
 
-        {/* Footer */}
-        <View style={styles.footer}>
-          <Text style={styles.footerLeft}>POLARIS PROTOCOL // LÉON ASTARTE</Text>
-          <Text style={styles.footerRight}>Système Sécurisé</Text>
+          {/* Footer */}
+          <View style={styles.footer}>
+            <Text style={styles.footerLeft}>POLARIS PROTOCOL // LÉON ASTARTE</Text>
+            <Text style={styles.footerRight}>Système Sécurisé</Text>
+          </View>
+
+          {/* Modal Connexion Admin */}
+          <AdminLoginModal
+            visible={showAdminLogin}
+            onConfirm={handleAdminLogin}
+            onCancel={() => setShowAdminLogin(false)}
+            hasError={loginError}
+          />
         </View>
-
-        {/* Modal Connexion Admin */}
-        <AdminLoginModal
-          visible={showAdminLogin}
-          onConfirm={handleAdminLogin}
-          onCancel={() => setShowAdminLogin(false)}
-          hasError={loginError}
-        />
-      </View>
+      )}
     </SafeAreaProvider>
   );
 };

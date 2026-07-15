@@ -1,4 +1,5 @@
 // DocumentCard - Version React Native
+// Affiche uniquement l'option "Télécharger le Document" (option Aperçu supprimée conformément aux spécifications).
 
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
@@ -8,10 +9,10 @@ import { COLORS, SPACING, RADIUS } from '../theme/colors';
 interface DocumentCardProps {
   doc: Document;
   onDownload: (doc: Document) => void;
-  onPreview: (doc: Document) => void;
+  onPreview?: (doc: Document) => void; // Optionnel et non affiché ici
 }
 
-const DocumentCard: React.FC<DocumentCardProps> = ({ doc, onDownload, onPreview }) => {
+const DocumentCard: React.FC<DocumentCardProps> = ({ doc, onDownload }) => {
   return (
     <View style={styles.card}>
       <View style={styles.glow} />
@@ -28,18 +29,11 @@ const DocumentCard: React.FC<DocumentCardProps> = ({ doc, onDownload, onPreview 
 
       <View style={styles.actions}>
         <TouchableOpacity
-          style={styles.previewBtn}
-          onPress={() => onPreview(doc)}
-          activeOpacity={0.7}
-        >
-          <Text style={styles.previewBtnText}>Aperçu</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
           style={styles.downloadBtn}
           onPress={() => onDownload(doc)}
           activeOpacity={0.7}
         >
-          <Text style={styles.downloadBtnText}>Télécharger</Text>
+          <Text style={styles.downloadBtnText}>⬇️ Télécharger le Document</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -108,37 +102,23 @@ const styles = StyleSheet.create({
   },
   actions: {
     flexDirection: 'row',
-    gap: SPACING.sm,
     paddingTop: SPACING.md,
     borderTopWidth: 1,
     borderTopColor: 'rgba(255, 255, 255, 0.05)',
   },
-  previewBtn: {
-    flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
-    paddingVertical: 14,
-    borderRadius: RADIUS.sm,
-    alignItems: 'center',
-  },
-  previewBtnText: {
-    color: 'rgba(255, 255, 255, 0.60)',
-    fontSize: 9,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 1.5,
-  },
   downloadBtn: {
     flex: 1,
     backgroundColor: COLORS.primary,
-    paddingVertical: 14,
+    paddingVertical: 15,
     borderRadius: RADIUS.sm,
     alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8,
   },
   downloadBtnText: {
     color: '#000000',
-    fontSize: 9,
+    fontSize: 11,
     fontWeight: '900',
     textTransform: 'uppercase',
     letterSpacing: 1.5,

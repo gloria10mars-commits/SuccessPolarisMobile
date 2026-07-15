@@ -1,6 +1,6 @@
-// PDFViewer - Version React Native (WebView)
-// Affiche l'aperçu PDF (Google Drive ou externe) sans option d'ouverture dans un navigateur externe.
-// Configure le User-Agent Desktop et domStorage pour éviter net::ERR_NAME_NOT_RESOLVED (redirection intent://).
+// PDFViewer - Version React Native
+// Lecteur et Visionneur de Documents intégré (Zéro ouverture externe).
+// Dispose de 2 moteurs de lecture (Drive Natif & Lecteur Universel) avec bascule instantanée en cas d'erreur réseau/DNS.
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -25,15 +25,25 @@ interface PDFViewerProps {
 const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
   const [isLoaded, setIsLoaded] = useState(false);
   const [hasError, setHasError] = useState(false);
+  const [engineMode, setEngineMode] = useState<'drive' | 'universal'>('drive');
 
   useEffect(() => {
     setIsLoaded(false);
     setHasError(false);
+    setEngineMode('drive'); // Par défaut Mode Drive Natif
   }, [doc]);
 
   if (!doc) return null;
 
-  const previewUrl = storageService.getDrivePreviewUrl(doc.fileUrl);
+  const driveUrl = storageService.getDrivePreviewUrl(doc.fileUrl);
+  const universalUrl = `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(doc.fileUrl)}`;
+  const currentUrl = engineMode === 'drive' ? driveUrl : universalUrl;
+
+  const toggleEngine = () => {
+    setHasError(false);
+    setIsLoaded(false);
+    setEngineMode((prev) => (prev === 'drive' ? 'universal' : 'drive'));
+  };
 
   return (
     <Modal visible={!!doc} animationType="slide" transparent={false} onRequestClose={onClose}>
@@ -48,7 +58,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
               <View style={[styles.light, { backgroundColor: 'rgba(0, 212, 255, 0.5)' }]} />
             </View>
             <View style={styles.headerTitle}>
-              <Text style={styles.headerLabel}>Nexus_Archive_v2.0</Text>
+              <Text style={styles.headerLabel}>Visionneur Astral de Documents</Text>
               <Text style={styles.headerDocTitle} numberOfLines={1}>{doc.title}</Text>
             </View>
           </View>
@@ -57,12 +67,22 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
           </TouchableOpacity>
         </View>
 
+        {/* Barre de sélection de Moteur (Permet de basculer en cas d'erreur de DNS ou de redirection) */}
+        <View style={styles.engineBar}>
+          <Text style={styles.engineLabel}>
+            Moteur actif : <Text style={styles.engineValue}>{engineMode === 'drive' ? '1. Drive Natif' : '2. Lecteur Universel'}</Text>
+          </Text>
+          <TouchableOpacity style={styles.engineBtn} onPress={toggleEngine} activeOpacity={0.7}>
+            <Text style={styles.engineBtnText}>🔄 Changer de Moteur</Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Content */}
         <View style={styles.content}>
           {!isLoaded && !hasError && (
             <View style={styles.loader}>
               <ActivityIndicator size="large" color={COLORS.primary} />
-              <Text style={styles.loaderText}>Décodage du Flux Astral...</Text>
+              <Text style={styles.loaderText}>Chargement du Visionneur...</Text>
               <View style={styles.progressTrack}>
                 <View style={styles.progressFill} />
               </View>
@@ -72,24 +92,20 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
           {hasError ? (
             <View style={styles.errorContainer}>
               <Text style={styles.errorIcon}>⚠️</Text>
-              <Text style={styles.errorTitle}>Erreur de Chargement du Flux</Text>
+              <Text style={styles.errorTitle}>Le Moteur {engineMode === 'drive' ? '1 (Drive Natif)' : '2 (Universel)'} est indisponible</Text>
               <Text style={styles.errorDesc}>
-                Le document n'a pas pu être affiché directement. Vérifiez votre connexion internet ou le statut de l'archive.
+                Si votre réseau bloque ce format de lecture ou si le DNS Drive ne répond pas, basculez immédiatement sur l'autre moteur de lecture.
               </Text>
-              <TouchableOpacity
-                style={styles.retryBtn}
-                onPress={() => {
-                  setHasError(false);
-                  setIsLoaded(false);
-                }}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.retryBtnText}>Réessayer</Text>
+              <TouchableOpacity style={styles.switchRetryBtn} onPress={toggleEngine} activeOpacity={0.7}>
+                <Text style={styles.switchRetryBtnText}>
+                  👉 Basculer sur le Moteur {engineMode === 'drive' ? '2 (Lecteur Universel)' : '1 (Drive Natif)'}
+                </Text>
               </TouchableOpacity>
             </View>
           ) : (
             <WebView
-              source={{ uri: previewUrl }}
+              key={engineMode} // Force re-render lors du changement de moteur
+              source={{ uri: currentUrl }}
               style={[styles.webview, { opacity: isLoaded ? 1 : 0 }]}
               onLoad={() => setIsLoaded(true)}
               onError={(e) => {
@@ -97,11 +113,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
                 setHasError(true);
                 setIsLoaded(true);
               }}
-              onHttpError={(e) => {
-                console.warn('WebView http error:', e.nativeEvent);
-                // On ne bloque pas si c'est une alerte HTTP mineure sauf si la page est blanche
-              }}
-              // User-Agent de type PC Desktop pour forcer Google Drive à afficher la vue web au lieu d'appeler l'application via intent://
               userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
               domStorageEnabled={true}
               javaScriptEnabled={true}
@@ -112,7 +123,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
               allowUniversalAccessFromFileURLs={true}
               originWhitelist={['*']}
               onShouldStartLoadWithRequest={(request) => {
-                // Intercepter les schémas intent:// ou market:// qui provoquent net::ERR_NAME_NOT_RESOLVED / Domain: undefined
                 if (
                   request.url.startsWith('intent://') ||
                   request.url.startsWith('market://') ||
@@ -128,11 +138,11 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
           )}
         </View>
 
-        {/* Footer - Sans option d'ouverture externe */}
+        {/* Footer */}
         <View style={styles.footer}>
           <View style={styles.statusRow}>
             <View style={styles.statusDot} />
-            <Text style={styles.statusText}>Canal Sécurisé Léon Astarte // Lecture Interne</Text>
+            <Text style={styles.statusText}>Canal Sécurisé Léon Astarte // Lecture 100% Interne</Text>
           </View>
         </View>
       </View>
@@ -202,6 +212,37 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 18,
   },
+  engineBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(0, 212, 255, 0.08)',
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0, 212, 255, 0.20)',
+  },
+  engineLabel: {
+    color: 'rgba(255, 255, 255, 0.60)',
+    fontSize: 10,
+  },
+  engineValue: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+  },
+  engineBtn: {
+    backgroundColor: 'rgba(0, 212, 255, 0.20)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: RADIUS.pill,
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  engineBtnText: {
+    color: COLORS.primary,
+    fontSize: 9,
+    fontWeight: '900',
+  },
   content: {
     flex: 1,
     backgroundColor: '#000000',
@@ -265,19 +306,19 @@ const styles = StyleSheet.create({
     maxWidth: 320,
     lineHeight: 18,
   },
-  retryBtn: {
+  switchRetryBtn: {
     backgroundColor: COLORS.primary,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     borderRadius: RADIUS.sm,
     marginTop: SPACING.sm,
   },
-  retryBtnText: {
+  switchRetryBtnText: {
     color: '#000000',
     fontSize: 11,
     fontWeight: '900',
     textTransform: 'uppercase',
-    letterSpacing: 1.5,
+    letterSpacing: 1,
   },
   footer: {
     backgroundColor: 'rgba(0, 0, 0, 0.9)',
