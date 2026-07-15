@@ -49,6 +49,11 @@ const SuccessPolarisAssistant: React.FC<SuccessPolarisAssistantProps> = ({ isOpe
           <WebView
             source={{ uri: 'https://astarte.leonemmanuel6247.workers.dev/' }}
             style={styles.webview}
+            domStorageEnabled={true}
+            javaScriptEnabled={true}
+            thirdPartyCookiesEnabled={true}
+            sharedCookiesEnabled={true}
+            originWhitelist={['*']}
             allowsInlineMediaPlayback
             mediaPlaybackRequiresUserAction={false}
           />

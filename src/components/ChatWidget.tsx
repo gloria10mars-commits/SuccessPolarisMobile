@@ -60,6 +60,11 @@ const ChatWidget: React.FC<ChatWidgetProps> = ({ onOpen, isOpen, onClose }) => {
             <WebView
               source={{ uri: 'https://astarte.leonemmanuel6247.workers.dev/' }}
               style={styles.webview}
+              domStorageEnabled={true}
+              javaScriptEnabled={true}
+              thirdPartyCookiesEnabled={true}
+              sharedCookiesEnabled={true}
+              originWhitelist={['*']}
               allowsInlineMediaPlayback
               mediaPlaybackRequiresUserAction={false}
             />

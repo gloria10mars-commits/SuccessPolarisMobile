@@ -1,4 +1,6 @@
 // PDFViewer - Version React Native (WebView)
+// Affiche l'aperçu PDF (Google Drive ou externe) sans option d'ouverture dans un navigateur externe.
+// Configure le User-Agent Desktop et domStorage pour éviter net::ERR_NAME_NOT_RESOLVED (redirection intent://).
 
 import React, { useState, useEffect } from 'react';
 import {
@@ -8,7 +10,6 @@ import {
   StyleSheet,
   Modal,
   ActivityIndicator,
-  Linking,
   StatusBar,
 } from 'react-native';
 import WebView from 'react-native-webview';
@@ -23,9 +24,11 @@ interface PDFViewerProps {
 
 const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
   const [isLoaded, setIsLoaded] = useState(false);
+  const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
     setIsLoaded(false);
+    setHasError(false);
   }, [doc]);
 
   if (!doc) return null;
@@ -56,7 +59,7 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
 
         {/* Content */}
         <View style={styles.content}>
-          {!isLoaded && (
+          {!isLoaded && !hasError && (
             <View style={styles.loader}>
               <ActivityIndicator size="large" color={COLORS.primary} />
               <Text style={styles.loaderText}>Décodage du Flux Astral...</Text>
@@ -65,29 +68,72 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ doc, onClose }) => {
               </View>
             </View>
           )}
-          <WebView
-            source={{ uri: previewUrl }}
-            style={[styles.webview, { opacity: isLoaded ? 1 : 0 }]}
-            onLoad={() => setIsLoaded(true)}
-            originWhitelist={['*']}
-            allowsInlineMediaPlayback
-            mediaPlaybackRequiresUserAction={false}
-          />
+
+          {hasError ? (
+            <View style={styles.errorContainer}>
+              <Text style={styles.errorIcon}>⚠️</Text>
+              <Text style={styles.errorTitle}>Erreur de Chargement du Flux</Text>
+              <Text style={styles.errorDesc}>
+                Le document n'a pas pu être affiché directement. Vérifiez votre connexion internet ou le statut de l'archive.
+              </Text>
+              <TouchableOpacity
+                style={styles.retryBtn}
+                onPress={() => {
+                  setHasError(false);
+                  setIsLoaded(false);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.retryBtnText}>Réessayer</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <WebView
+              source={{ uri: previewUrl }}
+              style={[styles.webview, { opacity: isLoaded ? 1 : 0 }]}
+              onLoad={() => setIsLoaded(true)}
+              onError={(e) => {
+                console.warn('WebView error:', e.nativeEvent);
+                setHasError(true);
+                setIsLoaded(true);
+              }}
+              onHttpError={(e) => {
+                console.warn('WebView http error:', e.nativeEvent);
+                // On ne bloque pas si c'est une alerte HTTP mineure sauf si la page est blanche
+              }}
+              // User-Agent de type PC Desktop pour forcer Google Drive à afficher la vue web au lieu d'appeler l'application via intent://
+              userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+              domStorageEnabled={true}
+              javaScriptEnabled={true}
+              thirdPartyCookiesEnabled={true}
+              sharedCookiesEnabled={true}
+              mixedContentMode="always"
+              allowFileAccess={true}
+              allowUniversalAccessFromFileURLs={true}
+              originWhitelist={['*']}
+              onShouldStartLoadWithRequest={(request) => {
+                // Intercepter les schémas intent:// ou market:// qui provoquent net::ERR_NAME_NOT_RESOLVED / Domain: undefined
+                if (
+                  request.url.startsWith('intent://') ||
+                  request.url.startsWith('market://') ||
+                  request.url.startsWith('android-app://')
+                ) {
+                  return false;
+                }
+                return true;
+              }}
+              allowsInlineMediaPlayback
+              mediaPlaybackRequiresUserAction={false}
+            />
+          )}
         </View>
 
-        {/* Footer */}
+        {/* Footer - Sans option d'ouverture externe */}
         <View style={styles.footer}>
           <View style={styles.statusRow}>
             <View style={styles.statusDot} />
-            <Text style={styles.statusText}>Canal Sécurisé Léon Astarte</Text>
+            <Text style={styles.statusText}>Canal Sécurisé Léon Astarte // Lecture Interne</Text>
           </View>
-          <TouchableOpacity
-            style={styles.openSourceBtn}
-            onPress={() => Linking.openURL(doc.fileUrl)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.openSourceText}>Ouvrir Source ↗</Text>
-          </TouchableOpacity>
         </View>
       </View>
     </Modal>
@@ -196,6 +242,43 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.primary,
     width: '70%',
   },
+  errorContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: SPACING.xl,
+    gap: SPACING.md,
+  },
+  errorIcon: {
+    fontSize: 48,
+  },
+  errorTitle: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: 'bold',
+    textAlign: 'center',
+  },
+  errorDesc: {
+    color: 'rgba(255, 255, 255, 0.45)',
+    fontSize: 11,
+    textAlign: 'center',
+    maxWidth: 320,
+    lineHeight: 18,
+  },
+  retryBtn: {
+    backgroundColor: COLORS.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: RADIUS.sm,
+    marginTop: SPACING.sm,
+  },
+  retryBtnText: {
+    color: '#000000',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+  },
   footer: {
     backgroundColor: 'rgba(0, 0, 0, 0.9)',
     borderTopWidth: 1,
@@ -204,7 +287,7 @@ const styles = StyleSheet.create({
     paddingVertical: SPACING.sm,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
   },
   statusRow: {
     flexDirection: 'row',
@@ -218,27 +301,12 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.success,
   },
   statusText: {
-    color: 'rgba(255, 255, 255, 0.30)',
+    color: 'rgba(255, 255, 255, 0.40)',
     fontSize: 8,
     fontWeight: '900',
     textTransform: 'uppercase',
     letterSpacing: 1.5,
     fontStyle: 'italic',
-  },
-  openSourceBtn: {
-    backgroundColor: 'rgba(0, 212, 255, 0.10)',
-    borderWidth: 1,
-    borderColor: 'rgba(0, 212, 255, 0.30)',
-    paddingHorizontal: 18,
-    paddingVertical: 10,
-    borderRadius: RADIUS.sm,
-  },
-  openSourceText: {
-    color: COLORS.primary,
-    fontSize: 9,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 1.5,
   },
 });
 
