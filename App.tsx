@@ -108,8 +108,8 @@ const App: React.FC = () => {
       return;
     }
 
-    // Sauvegarde dans la mémoire cache interne isolée de l'application
-    const updatedDownloads = await storageService.saveToInternalDownloads(doc);
+    // Sauvegarde les métadonnées ET télécharge le fichier PDF en local
+    const { list: updatedDownloads, downloadResult } = await storageService.saveToInternalDownloads(doc);
     setCachedDownloadsList(updatedDownloads);
 
     // Ajout à l'historique des vus (auto-suppression 3j)
@@ -118,6 +118,12 @@ const App: React.FC = () => {
 
     storageService.logDownload(email, doc.title, doc.id);
     storageService.incrementDownload(doc.id);
+
+    if (downloadResult.success) {
+      console.log('✅ PDF téléchargé localement:', downloadResult.localPath);
+    } else {
+      console.warn('⚠️ Téléchargement local échoué (ouverture en ligne):', downloadResult.error);
+    }
 
     // Le fichier est lu par l'application jouant le rôle de visionneur de documents
     setViewerDoc(doc);
@@ -176,24 +182,46 @@ const App: React.FC = () => {
     return categories.filter((c) => c.parentId === parentId);
   }, [categories, navigationPath]);
 
-  const displayedDocuments = useMemo(async () => {
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      return documents.filter((d) => d.title.toLowerCase().includes(q) || d.description.toLowerCase().includes(q));
-    }
-    if (viewMode === 'library') {
-      const historyIds = await storageService.getUserHistory();
-      return documents.filter((doc) => historyIds.includes(doc.id));
-    }
-    if (navigationPath.length === 0) return [];
-    const lastCatId = navigationPath[navigationPath.length - 1].id;
-    return documents.filter((doc) => doc.categoryId === lastCatId);
-  }, [documents, navigationPath, searchQuery, viewMode]);
-
+  // CORRIGÉ: Remplacement du useMemo(async) anti-pattern par useEffect + useState
+  // L'ancienne version créait une nouvelle Promise à chaque rendu et causait des race conditions.
   const [resolvedDocs, setResolvedDocs] = useState<Document[]>([]);
+
   useEffect(() => {
-    displayedDocuments.then(setResolvedDocs);
-  }, [displayedDocuments]);
+    let isMounted = true;
+
+    const resolveDocs = async () => {
+      let result: Document[] = [];
+
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        result = documents.filter(
+          (d) => d.title.toLowerCase().includes(q) || d.description.toLowerCase().includes(q)
+        );
+      } else if (viewMode === 'library') {
+        const historyIds = await storageService.getUserHistory();
+        result = documents.filter((doc) => historyIds.includes(doc.id));
+      } else if (viewMode === 'archives') {
+        if (navigationPath.length === 0) {
+          result = [];
+        } else {
+          const lastCatId = navigationPath[navigationPath.length - 1].id;
+          result = documents.filter((doc) => doc.categoryId === lastCatId);
+        }
+      }
+      // Pour 'downloads' et 'history', on ne filtre pas les documents ici
+      // (ils sont gérés par les vues spécialisées)
+
+      if (isMounted) {
+        setResolvedDocs(result);
+      }
+    };
+
+    resolveDocs();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [documents, navigationPath, searchQuery, viewMode]);
 
   // Actions cache interne depuis le menu
   const handleRemoveDownload = async (docId: string) => {

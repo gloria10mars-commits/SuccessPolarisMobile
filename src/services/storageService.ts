@@ -1,11 +1,14 @@
-// storageService - Version React Native (AsyncStorage)
-// Identique en surface à la version web, mais persistant côté device.
-// Synchronisation hybride avec mise en cache transparente hebdomadaire (fin de semaine / 7 jours).
-// Stockage interne sécurisé des téléchargements et de l'historique (auto-suppression 3 jours).
+// storageService - Version React Native (AsyncStorage + expo-file-system)
+// Synchronisation hybride avec mise en cache transparente hebdomadaire (7 jours).
+// Téléchargement RÉEL des fichiers PDF dans le système de fichiers interne.
+// Historique des documents vus avec auto-suppression de 3 jours (72h).
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
 import { Category, Document, AdminAccount, VisitorActivity, CachedDownload, ViewHistoryItem } from '../types';
 import { URL_COMPTEUR, URL_LISTE_DOCUMENTS, APPS_SCRIPT_WEBHOOK_URL } from '../constants';
+
+const PDF_DIR = `${FileSystem.documentDirectory}pdf_cache/`;
 
 const KEYS = {
   CATEGORIES: 'sp_categories',
@@ -169,16 +172,90 @@ export const storageService = {
     return idMatch ? `https://drive.google.com/file/d/${idMatch[1]}/preview` : url;
   },
 
-  // ----- Gestion des Téléchargements (Cache Interne, pas d'accès externe) -----
-  saveToInternalDownloads: async (doc: Document): Promise<CachedDownload[]> => {
+  // ----- Gestion des Téléchargements (Cache Interne RÉEL - fichier PDF téléchargé) -----
+
+  // S'assure que le dossier de cache PDF existe
+  ensurePdfDir: async (): Promise<void> => {
+    const dirInfo = await FileSystem.getInfoAsync(PDF_DIR);
+    if (!dirInfo.exists) {
+      await FileSystem.makeDirectoryAsync(PDF_DIR, { intermediates: true });
+    }
+  },
+
+  // Génère le chemin local pour un document
+  getLocalPdfPath: (docId: string): string => {
+    return `${PDF_DIR}${docId}.pdf`;
+  },
+
+  // Vérifie si un fichier PDF est déjà téléchargé localement
+  isPdfDownloaded: async (docId: string): Promise<boolean> => {
+    const path = storageService.getLocalPdfPath(docId);
+    const info = await FileSystem.getInfoAsync(path);
+    return info.exists && (info.size || 0) > 0;
+  },
+
+  // Télécharge RÉELLEMENT le fichier PDF depuis l'URL vers le système de fichiers interne
+  downloadPdfFile: async (doc: Document): Promise<{ success: boolean; localPath: string | null; error?: string }> => {
+    await storageService.ensurePdfDir();
+    const localPath = storageService.getLocalPdfPath(doc.id);
+
+    // Si déjà téléchargé, on ne re-télécharge pas
+    const alreadyExists = await storageService.isPdfDownloaded(doc.id);
+    if (alreadyExists) {
+      return { success: true, localPath };
+    }
+
+    // Détermine l'URL de téléchargement direct
+    let downloadUrl = doc.fileUrl;
+
+    // Si c'est une URL Google Drive, on extrait l'ID et on utilise l'URL de téléchargement direct
+    const driveIdMatch = doc.fileUrl.match(/\/d\/([a-zA-Z0-9_-]+)/) || doc.fileUrl.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    if (driveIdMatch) {
+      const fileId = driveIdMatch[1];
+      downloadUrl = `https://drive.google.com/uc?export=download&id=${fileId}`;
+    }
+
+    try {
+      const downloadResult = await FileSystem.downloadAsync(downloadUrl, localPath);
+      if (downloadResult.status >= 200 && downloadResult.status < 300) {
+        // Vérifie que le fichier n'est pas vide
+        const info = await FileSystem.getInfoAsync(localPath);
+        if (info.exists && (info.size || 0) > 1000) {
+          await storageService.addLog('UPLOAD', `PDF téléchargé localement : ${doc.title} (${(info.size / 1024).toFixed(0)} KB)`);
+          return { success: true, localPath };
+        }
+      }
+      return { success: false, localPath: null, error: `HTTP ${downloadResult.status}` };
+    } catch (error: any) {
+      console.warn('Erreur téléchargement PDF:', error);
+      return { success: false, localPath: null, error: error?.message || 'Erreur inconnue' };
+    }
+  },
+
+  // Supprime un fichier PDF local
+  removeLocalPdfFile: async (docId: string): Promise<void> => {
+    const path = storageService.getLocalPdfPath(docId);
+    const info = await FileSystem.getInfoAsync(path);
+    if (info.exists) {
+      await FileSystem.deleteAsync(path, { idempotent: true });
+    }
+  },
+
+  // Sauvegarde les métadonnées ET télécharge le fichier PDF
+  saveToInternalDownloads: async (doc: Document): Promise<{ list: CachedDownload[]; downloadResult: { success: boolean; localPath: string | null; error?: string } }> => {
     const raw = await safeGet(KEYS.INTERNAL_DOWNLOADS);
     const list: CachedDownload[] = raw ? JSON.parse(raw) : [];
+
+    // Télécharge le fichier PDF en parallèle de la sauvegarde des métadonnées
+    const downloadResult = await storageService.downloadPdfFile(doc);
+
     if (!list.some((item) => item.doc.id === doc.id)) {
       list.unshift({ doc, downloadedAt: Date.now() });
       await safeSet(KEYS.INTERNAL_DOWNLOADS, JSON.stringify(list));
       await storageService.addLog('UPLOAD', `Fichier mis en cache interne : ${doc.title}`);
     }
-    return list;
+
+    return { list, downloadResult };
   },
 
   getInternalDownloads: async (): Promise<CachedDownload[]> => {
@@ -187,6 +264,9 @@ export const storageService = {
   },
 
   removeInternalDownload: async (docId: string): Promise<CachedDownload[]> => {
+    // Supprime aussi le fichier PDF local
+    await storageService.removeLocalPdfFile(docId);
+
     const raw = await safeGet(KEYS.INTERNAL_DOWNLOADS);
     const list: CachedDownload[] = raw ? JSON.parse(raw) : [];
     const updated = list.filter((item) => item.doc.id !== docId);
@@ -195,6 +275,17 @@ export const storageService = {
   },
 
   clearInternalDownloads: async (): Promise<void> => {
+    // Supprime tous les fichiers PDF locaux
+    await storageService.ensurePdfDir();
+    try {
+      const files = await FileSystem.readDirectoryAsync(PDF_DIR);
+      for (const file of files) {
+        await FileSystem.deleteAsync(`${PDF_DIR}${file}`, { idempotent: true });
+      }
+    } catch (e) {
+      console.warn('Erreur suppression dossier PDF:', e);
+    }
+
     await safeSet(KEYS.INTERNAL_DOWNLOADS, JSON.stringify([]));
   },
 
